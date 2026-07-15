@@ -173,6 +173,40 @@ export default defineHandler<ExampleCreatedPayload>({
 event types, one shared implementation. See these files in `handlers/` for the working
 example.
 
+## Delivery semantics & backpressure
+
+There is **no framework-level queue** — how events are delivered, buffered, and retried is
+entirely a property of the configured bus adapter. This differs significantly between
+transports, so pick the one that matches your handlers' runtime characteristics.
+
+| Transport | Handler invocation | Backlog lives | Backpressure | Concurrency | Durable / redelivery |
+| --- | --- | --- | --- | --- | --- |
+| **emitter** (default) | fire-and-forget (not awaited) | nowhere — in-flight promises in memory | ❌ none | unbounded | ❌ lost on crash; errors only logged |
+| **kafka** | awaited per message | broker (topic retention) | ✅ via offset commits | 1 per partition | ✅ redelivered until committed |
+| **nats** | awaited per message | JetStream stream | ✅ via `max_ack_pending` | 1 per subscription | ✅ `nak` → redelivered |
+
+**If a handler is long-running:**
+
+- **Emitter** — nothing blocks and nothing queues. `publish` dispatches immediately and the
+  handler promise is *not* awaited, so a slow handler just means many handler invocations run
+  concurrently (unbounded). A flood of events becomes unbounded in-memory work, and anything
+  in flight is lost if the process exits. This is a dev/test transport — not intended for
+  slow handlers under load.
+- **Kafka** — the consumer awaits your handler and does not advance the offset until it
+  resolves, so unprocessed events accumulate **durably on the broker** (consumer lag), not in
+  memory. Backpressure is automatic; nothing is lost within retention. A throw leaves the
+  offset uncommitted, so the message is redelivered.
+- **NATS/JetStream** — the subscription awaits your handler, then acks. The backlog sits
+  **durably in the stream**, and the server won't push more than `max_ack_pending` un-acked
+  messages, so a slow handler creates back-pressure once that window fills. A throw triggers
+  `nak` → redelivery.
+
+**Guidance:** for long-running handlers in production use Kafka or NATS — you get a durable
+backlog and real backpressure, and the same handler code runs unchanged. On the awaited
+transports, throughput scales by adding partitions/consumers (Kafka) or subscriptions (NATS),
+not by parallelism inside a single handler. The emitter offers no bounded-concurrency or queue
+option today; that would need to be added to the adapter.
+
 ## Using the data store
 
 `ctx.store.repository<T>(collection, schema?)` returns a collection-scoped key/value
