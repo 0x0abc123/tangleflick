@@ -121,3 +121,5 @@ export default defineHandler<OrderPlacedPayload>({
 
 - `/new-event` — scaffold an event schema in `events/`.
 - `/new-handler` — scaffold a handler in `handlers/` (and its event def if missing).
+- `/audit-deps` — scan dependencies for vulnerabilities with `bun audit` and remediate.
+- `/update-deps` — plan and execute dependency updates (`bun outdated` → `bun update` → verify).
