@@ -123,12 +123,28 @@ Each handler receives a `HandlerContext`:
 - `ctx.store` — the shared `DataStore`
 - `ctx.logger` — structured logger, pre-scoped to the handler
 
-### Fan-out: many handlers per event type
+### Fan-out and consumer groups
 
-**Multiple handlers can subscribe to the same event type** — every matching handler runs for
-each event (fan-out). Just add more `*.handler.ts` files that declare the same `eventType`.
-For example, `example.created` is handled by both `example.handler.ts` (which processes and
-persists it) and `audit-created.handler.ts` (which records an audit entry).
+**Multiple handlers can subscribe to the same event type** — by default every matching handler
+runs for each event (fan-out). Just add more `*.handler.ts` files that declare the same
+`eventType`. For example, `example.created` is handled by both `example.handler.ts` (which
+processes and persists it) and `audit-created.handler.ts` (which records an audit entry).
+
+This holds on **all** transports: each handler gets its own consumer identity (derived from
+its filename), so on Kafka/NATS distinct handlers each receive every event rather than
+accidentally sharing a subscription.
+
+To make delivery **shared/load-balanced** instead of fanned out — so exactly one consumer
+handles each event — give the relevant handlers the same `group`:
+
+- **Same handler, many instances** (horizontal scaling): the framework already uses a stable
+  per-handler identity, so N replicas of your service load-balance that handler's events
+  automatically (Kafka consumer group / NATS queue group). No `group` needed.
+- **Different handlers sharing work**: set the same `group` on each so they compete for events
+  instead of all receiving them.
+
+> `group` has no effect on the in-process emitter (it always fans out) — it's meaningful on
+> Kafka and NATS. See [Delivery semantics](#delivery-semantics--backpressure).
 
 > A single handler still subscribes to exactly one event type. To react to several types,
 > use one handler file per type — and share logic between them as shown next.
@@ -207,6 +223,14 @@ transports, throughput scales by adding partitions/consumers (Kafka) or subscrip
 not by parallelism inside a single handler. The emitter offers no bounded-concurrency or queue
 option today; that would need to be added to the adapter.
 
+**Consumer identity (Kafka/NATS).** Each handler subscribes with its own stable identity
+(derived from its filename), which becomes the Kafka `groupId` (namespaced under `bus.groupId`)
+or the NATS durable/queue name. That's what makes fan-out correct — two handlers on the same
+event type are independent consumers. Setting the same `group` on multiple subscriptions
+overrides this so they share one consumer group instead (load-balanced). Because the identity
+is stable (not random), multiple replicas of the same handler load-balance across instances
+rather than duplicating work.
+
 ## Using the data store
 
 `ctx.store.repository<T>(collection, schema?)` returns a collection-scoped key/value
@@ -245,6 +269,10 @@ bespoke DDL. For richer relational queries, add your own tables via a migration.
 { "type": "kafka", "brokers": ["localhost:9092"], "clientId": "app", "groupId": "app", "ssl": false }
 { "type": "nats",  "servers": ["nats://localhost:4222"], "stream": "EVENTS", "durablePrefix": "app" }
 ```
+
+`groupId` (Kafka) and `durablePrefix` (NATS) are **namespaces**, not the full consumer name:
+each handler's consumer id is appended, so per-handler groups look like `app.<handler>` /
+`app_<eventType>_<handler>`. See [Fan-out and consumer groups](#fan-out-and-consumer-groups).
 
 **Store options**
 

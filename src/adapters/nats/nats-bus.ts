@@ -92,18 +92,23 @@ export class NatsBus implements EventBus {
     opts?: SubscribeOptions,
   ): Promise<Subscription> {
     const subject = this.subjectFor(eventType);
-    const durable = this.durableName(eventType, opts?.group);
+    // Consumer identity: an explicit `group` is shared across subscribers;
+    // otherwise the per-handler consumerId keeps distinct handlers separate so
+    // they fan out. The durable is unique per (event type, identity); a queue
+    // group of the same name lets multiple instances share the work.
+    const consumerName = opts?.group ?? opts?.consumerId ?? "default";
+    const durable = this.durableName(eventType, consumerName);
 
     const settings = consumerOpts();
     settings.durable(durable);
     settings.deliverTo(createInbox());
     settings.manualAck();
     settings.ackExplicit();
-    if (opts?.group) settings.queue(opts.group);
+    settings.queue(this.sanitize(consumerName));
 
     const sub = await this.js.subscribe(subject, settings);
     this.subs.push(sub);
-    this.deps.logger.info("nats subscribed", { subject, durable });
+    this.deps.logger.info("nats subscribed", { subject, durable, queue: consumerName });
 
     // Drive the async iterator in the background.
     void (async () => {
@@ -137,8 +142,12 @@ export class NatsBus implements EventBus {
     };
   }
 
-  private durableName(eventType: string, group?: string): string {
-    const raw = `${this.deps.config.durablePrefix}_${group ?? "default"}_${eventType}`;
-    return raw.replace(/[^A-Za-z0-9_]/g, "_");
+  private durableName(eventType: string, consumerName: string): string {
+    return this.sanitize(`${this.deps.config.durablePrefix}_${eventType}_${consumerName}`);
+  }
+
+  /** Durable/queue names may not contain dots, wildcards or whitespace. */
+  private sanitize(value: string): string {
+    return value.replace(/[^A-Za-z0-9_]/g, "_");
   }
 }

@@ -12,8 +12,21 @@ export interface PublishOptions {
 }
 
 export interface SubscribeOptions {
-  /** Consumer group (Kafka groupId / NATS durable). Enables load-balancing. */
+  /**
+   * Shared-consumption group. Subscribers that pass the SAME `group` (across
+   * handlers or across instances) share the workload — each event is handled by
+   * only one of them (load-balanced). Omit for fan-out: the subscription gets
+   * its own consumer identity and receives every event independently.
+   */
   group?: string;
+  /**
+   * Stable unique identity for this subscription, used to derive a per-handler
+   * consumer name on durable transports (Kafka groupId / NATS durable) when no
+   * `group` is set. The registration layer passes the handler's id here so two
+   * distinct handlers on the same event type each get their own consumer (true
+   * fan-out) rather than accidentally sharing one. Ignored by the emitter.
+   */
+  consumerId?: string;
 }
 
 /**

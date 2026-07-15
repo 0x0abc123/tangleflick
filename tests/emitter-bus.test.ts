@@ -32,6 +32,27 @@ describe("EmitterBus", () => {
     await bus.disconnect();
   });
 
+  test("fans out to every subscriber on the same event type", async () => {
+    const bus = makeBus();
+    await bus.connect();
+
+    let a = 0;
+    let b = 0;
+    await bus.subscribe("ping", async () => {
+      a++;
+    });
+    await bus.subscribe("ping", async () => {
+      b++;
+    });
+
+    await bus.publish("ping", { n: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(a).toBe(1);
+    expect(b).toBe(1);
+    await bus.disconnect();
+  });
+
   test("unsubscribe stops delivery", async () => {
     const bus = makeBus();
     await bus.connect();

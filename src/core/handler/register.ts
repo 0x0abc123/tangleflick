@@ -23,9 +23,10 @@ export async function registerHandlers(
 ): Promise<Subscription[]> {
   const subscriptions: Subscription[] = [];
 
-  for (const { handler } of handlers) {
+  for (const { handler, id } of handlers) {
     const logger = deps.logger.child({
-      handler: handler.eventType,
+      handler: id,
+      eventType: handler.eventType,
       ...(handler.group ? { group: handler.group } : {}),
     });
     const ctx: HandlerContext = {
@@ -47,11 +48,12 @@ export async function registerHandlers(
           throw err; // let the transport decide on retry / DLQ semantics
         }
       },
-      handler.group ? { group: handler.group } : undefined,
+      { consumerId: id, ...(handler.group ? { group: handler.group } : {}) },
     );
 
     subscriptions.push(sub);
     deps.logger.info("handler registered", {
+      handler: id,
       eventType: handler.eventType,
       group: handler.group,
     });

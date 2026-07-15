@@ -82,7 +82,12 @@ export class KafkaBus implements EventBus {
     listener: EventListener<T>,
     opts?: SubscribeOptions,
   ): Promise<Subscription> {
-    const groupId = opts?.group ?? this.deps.config.groupId;
+    // Event type == topic. The consumer group decides sharing: an explicit
+    // `group` is shared/load-balanced; otherwise each handler gets its own
+    // group (derived from consumerId) so distinct handlers fan out. The base
+    // config.groupId namespaces all of them under this app.
+    const consumerName = opts?.group ?? opts?.consumerId ?? "default";
+    const groupId = `${this.deps.config.groupId}.${consumerName}`;
     const consumer = this.kafka.consumer({ groupId });
     await consumer.connect();
     await consumer.subscribe({ topic: eventType, fromBeginning: false });

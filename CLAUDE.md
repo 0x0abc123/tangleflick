@@ -99,6 +99,13 @@ export default defineHandler<OrderPlacedPayload>({
 - **One schema per event type.** The registry throws on conflicting schemas. Multiple handlers
   may subscribe to the same type, but they must reference the same schema (import the shared
   `defineEvent`).
+- **Fan-out vs consumer groups.** Each handler gets a stable consumer identity from its
+  filename (`discover.ts` sets `id`; `register.ts` passes it as `SubscribeOptions.consumerId`).
+  On Kafka/NATS this becomes the `groupId` / durable name, so distinct handlers on the same
+  event type fan out (each sees every event) while replicas of one handler load-balance. An
+  explicit `group` on a handler overrides this to force shared/load-balanced consumption. The
+  emitter always fans out and ignores `group`/`consumerId`. When touching consumer naming,
+  keep all three adapters consistent.
 - **The emitter bus is in-process.** A separate process cannot publish to a running
   `bun start`. Use `bun run seed` for local triggering, or switch to Kafka/NATS.
 - **Strict TypeScript.** `verbatimModuleSyntax` (use `import type` for type-only imports),

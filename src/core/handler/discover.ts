@@ -8,6 +8,10 @@ export const DEFAULT_HANDLERS_DIR = "handlers";
 export interface DiscoveredHandler {
   handler: EventHandler;
   path: string;
+  /** Stable unique id for this handler (its file path relative to the dir,
+   *  minus the `.handler.ts` suffix), e.g. "audit-created". Used to derive a
+   *  distinct consumer identity per handler on durable transports. */
+  id: string;
 }
 
 /**
@@ -32,9 +36,11 @@ export async function discoverHandlers(
       continue;
     }
 
-    discovered.push({ handler: candidate, path });
+    const id = rel.replace(/\.handler\.ts$/i, "");
+    discovered.push({ handler: candidate, path, id });
     logger.debug("discovered handler", {
       path,
+      id,
       eventType: candidate.eventType,
     });
   }
