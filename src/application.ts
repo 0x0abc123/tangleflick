@@ -10,6 +10,7 @@ import { isMigrationStore } from "./core/store/migration-store.ts";
 import { discoverEventDefinitions } from "./core/events/discover.ts";
 import { discoverHandlers } from "./core/handler/discover.ts";
 import { registerHandlers } from "./core/handler/register.ts";
+import { HttpIngress } from "./http/server.ts";
 import type { EventBus, Subscription } from "./core/ports/event-bus.ts";
 import type { DataStore } from "./core/ports/data-store.ts";
 
@@ -33,6 +34,7 @@ export class Application {
   store!: DataStore;
 
   private subscriptions: Subscription[] = [];
+  private ingress?: HttpIngress;
   private started = false;
 
   constructor(private readonly options: ApplicationOptions = {}) {}
@@ -87,13 +89,27 @@ export class Application {
       logger: this.logger,
     });
 
+    // 5. Optionally accept events over HTTP (authenticated webhook ingress).
+    if (this.config.http?.enabled) {
+      this.ingress = new HttpIngress({
+        config: this.config.http,
+        bus: this.bus,
+        logger: this.logger,
+      });
+      this.ingress.start();
+    }
+
     this.started = true;
-    this.logger.info("started", { handlers: handlers.length });
+    this.logger.info("started", {
+      handlers: handlers.length,
+      http: this.config.http?.enabled ?? false,
+    });
   }
 
   async stop(): Promise<void> {
     if (!this.started) return;
     this.logger.info("shutting down");
+    await this.ingress?.stop().catch(() => {});
     for (const sub of this.subscriptions) {
       await sub.unsubscribe().catch(() => {});
     }

@@ -174,6 +174,53 @@ fails fast with a readable error. Override the path with `TANGLEFLICK_CONFIG=/pa
 
 ---
 
+## HTTP webhook ingress
+
+Optionally accept events over HTTP from external systems. When `http.enabled` is true, the
+app starts a server that turns authenticated `POST` requests into events on the bus. Add an
+`http` block to `config.json`:
+
+```jsonc
+{
+  "http": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 3000,
+    "path": "/webhook",
+    "allowedEvents": ["order.placed"],     // only these types may be ingested
+    "maxBodyBytes": 1048576,
+    "auth": { "type": "apiKey", "header": "authorization", "scheme": "Bearer", "token": "env:WEBHOOK_TOKEN" }
+  }
+}
+```
+
+Send events as `POST {path}` with body `{ "type": "...", "payload": { ... } }`:
+
+```bash
+curl -X POST http://localhost:3000/webhook \
+  -H 'authorization: Bearer <token>' \
+  -H 'content-type: application/json' \
+  -d '{"type":"order.placed","payload":{"orderId":"o1","total":9.99}}'
+```
+
+- The type must be in `allowedEvents`, and the payload is validated against that type's
+  registered schema before publishing.
+- Responses: `202` accepted · `401` bad/missing auth · `403` type not allowed ·
+  `400` malformed body or schema-invalid payload · `413` too large. `GET /health` → `200`.
+- An optional `x-correlation-id` header is forwarded onto the event envelope.
+
+**Authentication** (`http.auth.type`):
+
+```jsonc
+// Shared secret in a header (you control the sender)
+{ "type": "apiKey", "header": "authorization", "scheme": "Bearer", "token": "env:WEBHOOK_TOKEN" }
+// HMAC-SHA256 over the raw body (third-party providers like Stripe/GitHub)
+{ "type": "hmac", "header": "x-signature", "algorithm": "sha256", "secret": "env:WEBHOOK_SECRET", "encoding": "hex", "prefix": "sha256=" }
+```
+
+Secrets support the `env:VAR_NAME` form to read from the environment instead of hard-coding
+them. Credentials are compared in constant time.
+
 ## Migrations
 
 Ordered `.sql` files in `migrations/` are applied at startup (and via `bun run migrate`),
