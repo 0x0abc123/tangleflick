@@ -1,0 +1,13 @@
+{
+  "app": {
+    "name": "tangleflick",
+    "logLevel": "info"
+  },
+  "bus": {
+    "type": "emitter"
+  },
+  "store": {
+    "type": "sqlite",
+    "path": "./data/tangleflick.db"
+  }
+}
