@@ -123,6 +123,56 @@ Each handler receives a `HandlerContext`:
 - `ctx.store` — the shared `DataStore`
 - `ctx.logger` — structured logger, pre-scoped to the handler
 
+### Fan-out: many handlers per event type
+
+**Multiple handlers can subscribe to the same event type** — every matching handler runs for
+each event (fan-out). Just add more `*.handler.ts` files that declare the same `eventType`.
+For example, `example.created` is handled by both `example.handler.ts` (which processes and
+persists it) and `audit-created.handler.ts` (which records an audit entry).
+
+> A single handler still subscribes to exactly one event type. To react to several types,
+> use one handler file per type — and share logic between them as shown next.
+
+### Sharing logic between handlers
+
+Factor common behaviour into a plain function and reuse it as different handlers' `handle`.
+A helper that accepts a generic `EventEnvelope` works for any payload shape. Put it in a file
+that does **not** end in `.handler.ts` so it isn't auto-discovered as a handler:
+
+```ts
+// handlers/_shared.ts
+import type { EventEnvelope } from "../src/core/events/envelope.ts";
+import type { HandlerContext } from "../src/core/handler/types.ts";
+
+export async function auditEvent(event: EventEnvelope, ctx: HandlerContext): Promise<void> {
+  ctx.logger.info("audit", { type: event.type, id: event.id });
+  const audit = ctx.store.repository("audit_log");
+  await audit.put(event.id, {
+    type: event.type,
+    source: event.source,
+    time: event.time,
+    correlationId: event.correlationId ?? null,
+  });
+}
+```
+
+```ts
+// handlers/audit-created.handler.ts — reuse the shared function as `handle`
+import { defineHandler } from "../src/core/handler/types.ts";
+import { ExampleCreated, type ExampleCreatedPayload } from "../events/example.event.ts";
+import { auditEvent } from "./_shared.ts";
+
+export default defineHandler<ExampleCreatedPayload>({
+  eventType: ExampleCreated.type,
+  schema: ExampleCreated.schema,
+  handle: auditEvent,
+});
+```
+
+`handlers/audit-processed.handler.ts` does the same for `example.processed` — two different
+event types, one shared implementation. See these files in `handlers/` for the working
+example.
+
 ## Using the data store
 
 `ctx.store.repository<T>(collection, schema?)` returns a collection-scoped key/value
