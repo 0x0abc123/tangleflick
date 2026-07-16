@@ -108,6 +108,11 @@ export default defineHandler<OrderPlacedPayload>({
   keep all three adapters consistent.
 - **The emitter bus is in-process.** A separate process cannot publish to a running
   `bun start`. Use `bun run seed` for local triggering, or switch to Kafka/NATS.
+- **Throttle expensive handler work at the resource, not the bus.** The emitter dispatches
+  handlers with unbounded concurrency. Handlers that run external OS commands should share a
+  single module-level concurrency limiter (a semaphore) and wrap the command in
+  `limiter.run(() => Bun.spawn(...))`. See README → "Throttling handler work". Put the limiter
+  in a non-`.handler.ts` file (e.g. `handlers/_limiter.ts`) so it isn't auto-discovered.
 - **Strict TypeScript.** `verbatimModuleSyntax` (use `import type` for type-only imports),
   `noUncheckedIndexedAccess` (array indexing yields `T | undefined` — guard or `!` with care),
   and `.ts` extensions in relative imports are required.

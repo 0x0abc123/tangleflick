@@ -231,6 +231,106 @@ overrides this so they share one consumer group instead (load-balanced). Because
 is stable (not random), multiple replicas of the same handler load-balance across instances
 rather than duplicating work.
 
+### Throttling handler work (shared concurrency limiter)
+
+The emitter dispatches handlers with **unbounded concurrency** and no queue, so if your
+handlers do expensive work — especially invoking **external OS commands** — you should cap
+that work yourself. The recommended pattern is to throttle the *resource*, not the bus:
+**a single shared concurrency limiter (a semaphore, as a module-level singleton) that every
+handler wraps its command in.** When N operations are in flight, the next handler parks inside
+`limiter.run(...)` until a slot frees.
+
+This is the right layer to throttle at because:
+
+- It caps the thing that actually exhausts the machine (concurrent subprocesses: CPU, PIDs,
+  file descriptors), regardless of whether the triggering event came from ingress or from
+  another handler.
+- It's deadlock-free — the limiter sits *below* the handler and never blocks `publish()`, so a
+  handler publishing back onto the bus can't deadlock against it.
+- If your handlers are shaped `event → run command → emit follow-up event`, the limiter
+  transitively **paces the whole internal cascade**: new events can't be produced faster than
+  commands drain, so the backlog is self-limiting even though the emitter has no backpressure.
+  (This holds while follow-ups are emitted *after* the command and fan-out stays ≤ ~1 event per
+  command.)
+
+```ts
+// handlers/_limiter.ts — shared, process-wide limit. Files not ending in
+// `.handler.ts` are NOT auto-discovered, so this is a plain helper.
+class Semaphore {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+  constructor(private readonly max: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+
+  private acquire(): Promise<void> {
+    if (this.active < this.max) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => this.waiters.push(resolve));
+  }
+
+  private release(): void {
+    const next = this.waiters.shift();
+    if (next) next();        // hand the slot straight to the next waiter
+    else this.active--;
+  }
+}
+
+// One instance, imported by every handler → the cap is global across all
+// handlers and all in-flight events. Tune via env.
+export const commandLimiter = new Semaphore(
+  Number(process.env.MAX_CONCURRENT_COMMANDS ?? 4),
+);
+```
+
+```ts
+// handlers/convert.handler.ts — wrap the external command in limiter.run(...)
+import { defineHandler } from "../src/core/handler/types.ts";
+import { FileUploaded, FileConverted, type FileUploadedPayload } from "../events/file.event.ts";
+import { commandLimiter } from "./_limiter.ts";
+
+export default defineHandler<FileUploadedPayload>({
+  eventType: FileUploaded.type,
+  schema: FileUploaded.schema,
+
+  async handle(event, ctx) {
+    // At most MAX_CONCURRENT_COMMANDS of these run at once, process-wide; the
+    // (N+1)th handler parks here until a slot frees.
+    const out = await commandLimiter.run(async () => {
+      const proc = Bun.spawn(["convert", event.payload.src, event.payload.dst], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const code = await proc.exited;
+      if (code !== 0) {
+        throw new Error(`convert failed (${code}): ${await new Response(proc.stderr).text()}`);
+      }
+      return event.payload.dst;
+    });
+
+    await ctx.publish(FileConverted.type, { path: out });
+  },
+});
+```
+
+Notes:
+
+- Use **one** shared limiter for a global cap, or several partitioned limiters if some commands
+  are much heavier than others.
+- Add a **timeout + kill** around long commands — a hung subprocess otherwise holds its slot
+  forever and stalls the cascade (e.g. `setTimeout(() => proc.kill(), ms)` cleared on exit).
+- This is an in-process, non-durable limit. For durability or a hard bound under sustained
+  overload, use the Kafka/NATS transports (or an out-of-process job queue) instead.
+
 ## Using the data store
 
 `ctx.store.repository<T>(collection, schema?)` returns a collection-scoped key/value

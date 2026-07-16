@@ -60,6 +60,17 @@ plus a `ctx` for persisting state and publishing follow-up events.
    - `ctx.store.repository<T>(collection, schema?)` — get/put/delete/has/list/where/transaction
    - `ctx.logger` — structured logger, pre-scoped to this handler
 
+   **If the handler runs an external OS command** (`Bun.spawn`, etc.), wrap it in the shared
+   concurrency limiter so unbounded event volume can't spawn unbounded subprocesses:
+   ```ts
+   import { commandLimiter } from "./_limiter.ts"; // module-level singleton (see README)
+   const out = await commandLimiter.run(async () => {
+     const proc = Bun.spawn([...]); /* ... */ return result;
+   });
+   ```
+   Create `handlers/_limiter.ts` once if it doesn't exist (see README → "Throttling handler
+   work"); reuse it across all command-running handlers so the cap is global.
+
 4. **Verify:**
    - `bun run typecheck`
    - Exercise it end-to-end with the seed tool:
